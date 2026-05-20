@@ -1,0 +1,13 @@
+services:
+  docker-send:
+    build: .
+
+    container_name: docker-send
+
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
