@@ -23,13 +23,91 @@ fi
 # Trap for graceful shutdown
 trap 'echo "Shutting down..."; exit 0' SIGTERM SIGINT
 
+# Format timestamp as HH:MM:SS DD/MM-YYYY
+format_timestamp() {
+  local timestamp="$1"
+  date -d "@$timestamp" "+%H:%M:%S %d/%m-%Y" 2>/dev/null || date -r "$timestamp" "+%H:%M:%S %d/%m-%Y" 2>/dev/null || echo "Unknown"
+}
+
+# Get color based on action
+get_action_color() {
+  local action="$1"
+  case "$action" in
+    start)   echo "65280" ;;    # Green
+    stop)    echo "16776960" ;; # Yellow
+    restart) echo "16711680" ;; # Red
+    die)     echo "16711680" ;; # Red
+    *)       echo "9807270" ;;  # Gray
+  esac
+}
+
+# Get emoji based on action
+get_action_emoji() {
+  local action="$1"
+  case "$action" in
+    start)   echo "▶️" ;;
+    stop)    echo "⏹️" ;;
+    restart) echo "🔄" ;;
+    die)     echo "💀" ;;
+    *)       echo "📦" ;;
+  esac
+}
+
+# Send formatted Discord embed notification
 send_notification() {
   local name="$1"
   local action="$2"
-  local message="🐳 ${name} → ${action}"
+  local image="$3"
+  local exit_code="$4"
+  local timestamp="$5"
   
+  local emoji
+  emoji=$(get_action_emoji "$action")
+  
+  local color
+  color=$(get_action_color "$action")
+  
+  local formatted_time
+  formatted_time=$(format_timestamp "$timestamp")
+  
+  # Build description with exit code if present
+  local description="$action"
+  if [ -n "$exit_code" ] && [ "$exit_code" != "null" ]; then
+    description="$action (exit code: $exit_code)"
+  fi
+  
+  # Build Discord embed payload
   local payload
-  payload=$(jq -n --arg content "$message" '{content: $content}')
+  payload=$(jq -n \
+    --arg emoji "$emoji" \
+    --arg container "$name" \
+    --arg image "$image" \
+    --arg action "$action" \
+    --arg description "$description" \
+    --arg time "$formatted_time" \
+    --argjson color "$color" \
+    '{
+      embeds: [{
+        title: "\($emoji) \($container)",
+        description: $description,
+        color: $color,
+        fields: [
+          {
+            name: "Image",
+            value: $image,
+            inline: true
+          },
+          {
+            name: "Action",
+            value: $action,
+            inline: true
+          }
+        ],
+        footer: {
+          text: $time
+        }
+      }]
+    }')
   
   if ! curl -sS \
     -H "Content-Type: application/json" \
@@ -137,6 +215,9 @@ while true; do
     
     NAME=$(echo "$line" | jq -r '.Actor.Attributes.name // "unknown"')
     ACTION=$(echo "$line" | jq -r '.Action // "unknown"')
+    IMAGE=$(echo "$line" | jq -r '.Actor.Attributes.image // "unknown"')
+    EXIT_CODE=$(echo "$line" | jq -r '.Actor.Attributes.exitCode // ""')
+    TIMESTAMP=$(echo "$line" | jq -r '.time // 0')
     
     # Ignore self
     [ "$NAME" = "docker-send" ] && continue
@@ -156,7 +237,7 @@ while true; do
       cleanup_database
     fi
     
-    send_notification "$NAME" "$ACTION"
+    send_notification "$NAME" "$ACTION" "$IMAGE" "$EXIT_CODE" "$TIMESTAMP"
     
   then
     # If timeout or normal exit
