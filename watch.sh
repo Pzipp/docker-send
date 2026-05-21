@@ -13,7 +13,7 @@ fi
 # Database file for tracking events
 DB_FILE=".events.db"
 RESTART_THRESHOLD=3
-WINDOW_SECONDS=60
+WINDOW_SECONDS=300  # 5 minutes
 
 # Initialize database if it doesn't exist
 if [ ! -f "$DB_FILE" ]; then
@@ -122,6 +122,59 @@ send_notification() {
   return 0
 }
 
+# Send restart loop warning
+send_restart_loop_warning() {
+  local name="$1"
+  local timestamp="$2"
+  
+  local formatted_time
+  formatted_time=$(format_timestamp "$timestamp")
+  
+  local payload
+  payload=$(jq -n \
+    --arg container "$name" \
+    --arg time "$formatted_time" \
+    '{
+      embeds: [{
+        title: "🔴 RESTART LOOP DETECTED",
+        description: "Container \($container) is in a restart loop",
+        color: 16711680,
+        fields: [
+          {
+            name: "Container",
+            value: $container,
+            inline: true
+          },
+          {
+            name: "Status",
+            value: "Suppressing notifications",
+            inline: true
+          },
+          {
+            name: "Details",
+            value: "More than 3 restarts in 5 minutes detected. Further restart notifications will be suppressed until the container stabilizes.",
+            inline: false
+          }
+        ],
+        footer: {
+          text: $time
+        }
+      }]
+    }')
+  
+  if ! curl -sS \
+    -H "Content-Type: application/json" \
+    -X POST \
+    -d "$payload" \
+    "$DISCORD_WEBHOOK" \
+    -m 5 \
+    -w "\n%{http_code}" 2>/dev/null; then
+    echo "WARNING: Failed to send restart loop warning for $name"
+    return 1
+  fi
+  return 0
+}
+
 # Get current Unix timestamp
 get_timestamp() {
   date +%s
@@ -145,12 +198,17 @@ should_rate_limit_restart() {
   local last_restart
   last_restart=$(echo "$db_content" | jq -r ".\"$container_name\".last_time // 0" 2>/dev/null || echo "0")
   
+  # Get whether we've already warned about this loop
+  local warned
+  warned=$(echo "$db_content" | jq -r ".\"$container_name\".warned // false" 2>/dev/null || echo "false")
+  
   # Calculate time since last restart
   local time_diff=$((current_time - last_restart))
   
   # If more than WINDOW_SECONDS have passed, reset counter
   if [ "$time_diff" -gt "$WINDOW_SECONDS" ]; then
     restart_count=0
+    warned="false"
   fi
   
   # Increment restart count
@@ -162,14 +220,28 @@ should_rate_limit_restart() {
     --arg container "$container_name" \
     --argjson count "$restart_count" \
     --argjson timestamp "$current_time" \
-    '.[$container] = {restarts: $count, last_time: $timestamp}')
+    --argjson was_warned "$warned" \
+    '.[$container] = {restarts: $count, last_time: $timestamp, warned: $was_warned}')
   
   echo "$new_db" > "$DB_FILE"
   
-  # Return 0 (true) if we should rate-limit (threshold exceeded)
-  # Return 1 (false) if we should allow the notification
+  # Check if we've exceeded threshold
   if [ "$restart_count" -gt "$RESTART_THRESHOLD" ]; then
-    echo "RATE_LIMITED: $container_name has restarted $restart_count times in ${WINDOW_SECONDS}s"
+    # If we haven't warned yet, send warning
+    if [ "$warned" = "false" ]; then
+      echo "RESTART LOOP: $container_name has exceeded threshold, sending warning"
+      send_restart_loop_warning "$container_name" "$current_time"
+      
+      # Mark as warned in database
+      new_db=$(echo "$db_content" | jq \
+        --arg container "$container_name" \
+        --argjson count "$restart_count" \
+        --argjson timestamp "$current_time" \
+        '.[$container] = {restarts: $count, last_time: $timestamp, warned: true}')
+      echo "$new_db" > "$DB_FILE"
+    fi
+    
+    echo "RATE_LIMITED: $container_name has restarted $restart_count times in 5 minutes"
     return 0
   fi
   
