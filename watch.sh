@@ -20,9 +20,6 @@ if [ ! -f "$DB_FILE" ]; then
   echo "{}" > "$DB_FILE"
 fi
 
-# Trap for graceful shutdown
-trap 'echo "Shutting down..."; exit 0' SIGTERM SIGINT
-
 # Format timestamp as HH:MM:SS DD/MM-YYYY
 format_timestamp() {
   local timestamp="$1"
@@ -175,6 +172,53 @@ send_restart_loop_warning() {
   return 0
 }
 
+# Send shutdown message
+send_shutdown_message() {
+  local current_time
+  current_time=$(date +%s)
+  
+  local formatted_time
+  formatted_time=$(format_timestamp "$current_time")
+  
+  local payload
+  payload=$(jq -n \
+    --arg time "$formatted_time" \
+    '{
+      embeds: [{
+        title: "🛑 docker-send is shutting down",
+        description: "The docker-send event monitor has been stopped",
+        color: 9807270,
+        fields: [
+          {
+            name: "Status",
+            value: "Offline",
+            inline: true
+          },
+          {
+            name: "Note",
+            value: "Container will auto-restart if restart policy is enabled",
+            inline: true
+          }
+        ],
+        footer: {
+          text: $time
+        }
+      }]
+    }')
+  
+  if ! curl -sS \
+    -H "Content-Type: application/json" \
+    -X POST \
+    -d "$payload" \
+    "$DISCORD_WEBHOOK" \
+    -m 5 \
+    -w "\n%{http_code}" 2>/dev/null; then
+    echo "WARNING: Failed to send shutdown message"
+    return 1
+  fi
+  return 0
+}
+
 # Get current Unix timestamp
 get_timestamp() {
   date +%s
@@ -264,6 +308,9 @@ cleanup_database() {
   
   echo "$cleaned_db" > "$DB_FILE"
 }
+
+# Trap for graceful shutdown
+trap 'echo "Received shutdown signal"; send_shutdown_message; exit 0' SIGTERM SIGINT
 
 # Main reconnect loop
 while true; do
