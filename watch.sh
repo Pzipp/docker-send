@@ -113,7 +113,7 @@ send_shutdown_message() {
 # Parse single docker event with one jq call
 parse_event() {
   line="$1"
-  jq -r '[.Actor.Attributes.name // "unknown", .Action // "unknown", .Actor.Attributes.image // "unknown", .Actor.Attributes.exitCode // "", .time // 0] | @csv' <<< "$line"
+  echo "$line" | jq -r '[.Actor.Attributes.name // "unknown", .Action // "unknown", .Actor.Attributes.image // "unknown", .Actor.Attributes.exitCode // "", .time // 0] | @csv'
 }
 
 # Clean up old entries from database
