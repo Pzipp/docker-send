@@ -134,7 +134,7 @@ cleanup_database() {
 get_container_state() {
   container_name="$1"
   db_content=$(cat "$DB_FILE")
-  jq -r ".\"$container_name\" | [.restarts // 0, .last_time // 0, .warned // false] | @csv" <<< "$db_content"
+  echo "$db_content" | jq -r ".\"$container_name\" | [.restarts // 0, .last_time // 0, .warned // false] | @csv"
 }
 
 # Update database with single write
