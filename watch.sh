@@ -84,7 +84,7 @@ send_event_notification() {
   send_discord_message "$payload"
 }
 
-# Send restart loop warning
+# Send crash loop warning
 send_restart_loop_warning() {
   name="$1"
   timestamp="$2"
@@ -93,7 +93,7 @@ send_restart_loop_warning() {
   payload=$(jq -n \
     --arg container "$name" \
     --arg time "$formatted_time" \
-    '{embeds:[{title:"🔴 RESTART LOOP DETECTED",description:"Container \($container) is in a restart loop",color:16711680,fields:[{name:"Container",value:$container,inline:true},{name:"Status",value:"Suppressing notifications",inline:true},{name:"Details",value:"More than 3 restarts in 5 minutes detected. Further notifications suppressed.",inline:false}],footer:{text:$time}}]}')
+    '{embeds:[{title:"🔴 CRASH LOOP DETECTED",description:"Container \($container) is in a crash loop",color:16711680,fields:[{name:"Container",value:$container,inline:true},{name:"Status",value:"Suppressing notifications",inline:true},{name:"Details",value:"More than 3 restarts/crashes in 5 minutes detected. Further notifications suppressed.",inline:false}],footer:{text:$time}}]}')
 
   send_discord_message "$payload"
 }
@@ -227,10 +227,11 @@ while true; do
 
     echo "Event: $NAME → $ACTION"
 
-    # Rate-limit restart events
-    if [ "$ACTION" = "restart" ]; then
+    # Rate-limit crash/restart loop events (restart, die, start cover both
+    # explicit restarts and the die→start cycle from restart: unless-stopped)
+    if [ "$ACTION" = "restart" ] || [ "$ACTION" = "die" ] || [ "$ACTION" = "start" ]; then
       if should_rate_limit_restart "$NAME" "$(get_timestamp)"; then
-        echo "Skipping notification (restart spam detected)"
+        echo "Skipping notification (crash loop detected)"
         continue
       fi
     fi
